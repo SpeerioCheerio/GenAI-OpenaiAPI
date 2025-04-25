@@ -1,0 +1,33 @@
+>> List customer names along with the number of products they ordered
+
+Raw GPT-4o output:
+ ```sql
+SELECT `c`.`customerName`, COUNT(`od`.`productCode`) AS `numberOfProductsOrdered`
+FROM `customers` AS `c`
+JOIN `orders` AS `o` ON `c`.`customerNumber` = `o`.`customerNumber`
+JOIN `orderdetails` AS `od` ON `o`.`orderNumber` = `od`.`orderNumber`
+GROUP BY `c`.`customerName`
+LIMIT 5;
+```
+
+Executing SQL:
+ SELECT `c`.`customerName`, COUNT(`od`.`productCode`) AS `numberOfProductsOrdered`
+FROM `customers` AS `c`
+JOIN `orders` AS `o` ON `c`.`customerNumber` = `o`.`customerNumber`
+JOIN `orderdetails` AS `od` ON `o`.`orderNumber` = `od`.`orderNumber`
+GROUP BY `c`.`customerName`
+LIMIT 5
+
+Raw Result:
+ [('Atelier graphique', 7), ('Signal Gift Stores', 29), ('Australian Collectors, Co.', 55), ('La Rochelle Gifts', 53), ('Baane Mini Imports', 32)]
+
+Rephrased Answer:
+ Here are the names of some customers along with the number of products they have ordered:
+
+1. Atelier graphique ordered 7 products.
+2. Signal Gift Stores ordered 29 products.
+3. Australian Collectors, Co. ordered 55 products.
+4. La Rochelle Gifts ordered 53 products.
+5. Baane Mini Imports ordered 32 products.
+
+These numbers reflect the total products ordered by each customer. If you need more information or details about other customers, feel free to ask!
