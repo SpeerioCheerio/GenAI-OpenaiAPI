@@ -1,6 +1,6 @@
+import streamlit as st
 import os
 import re
-from operator import itemgetter
 
 from langchain_community.utilities.sql_database import SQLDatabase
 from langchain.chains import create_sql_query_chain
@@ -9,7 +9,7 @@ from langchain_community.tools.sql_database.tool import QuerySQLDatabaseTool
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 
-# 1. Configure
+# 1. Configure environment and credentials
 os.environ["OPENAI_API_KEY"] = "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"
 DB_USER     = "root"
 DB_PASSWORD = "Aes2024358.."
@@ -17,7 +17,7 @@ DB_HOST     = "localhost"
 DB_PORT     = 3306
 DB_NAME     = "classicmodels"
 
-# 2. Schema reference to embed into LangChain
+# 2. Embed your schema reference (paste full CREATE TABLE definitions here)
 schema_reference = """
 [Database Dialect]:
 mysql
@@ -135,16 +135,17 @@ CREATE TABLE products (
 ) COLLATE utf8mb4_0900_ai_ci DEFAULT CHARSET=utf8mb4 ENGINE=InnoDB;
 """
 
-# 3. Connect with embedded schema info
-uri = f"mysql+pymysql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
-db = SQLDatabase.from_uri(uri, custom_table_info={DB_NAME: schema_reference})
 
-# 4. Init LLM + Tools
+@st.cache_resource
+def get_db():
+    uri = f"mysql+pymysql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+    return SQLDatabase.from_uri(uri, custom_table_info={DB_NAME: schema_reference})
+
+db = get_db()
 llm = ChatOpenAI(model="gpt-3.5-turbo", temperature=0)
 generate_query = create_sql_query_chain(llm, db)
-execute_query = QuerySQLDatabaseTool(db=db)
+execute_query  = QuerySQLDatabaseTool(db=db)
 
-# 5. Rephrasing prompt template
 answer_prompt = PromptTemplate.from_template(
     """Given the following user question, corresponding SQL query, and SQL result, answer the user question in a clear, conversational style.
 
@@ -156,52 +157,120 @@ Answer:"""
 )
 rephrase_answer = answer_prompt | llm | StrOutputParser()
 
-# 6. Robust SQL extractor
 def extract_sql(text: str) -> str:
-    # strip code fences
     text = re.sub(r'```[^\n]*\n', '', text).replace('```', '')
-    # remove lone “sql” or “SQLQuery” lines
     lines = [
         line for line in text.splitlines()
-        if not re.match(r'^\s*(sql|SQLQuery)\s*[:\-]?\s*$', line, re.IGNORECASE)
+        if not re.match(r'^\s*(sql|SQLQuery)\s*[:\\-]?\s*$', line, re.IGNORECASE)
     ]
     cleaned = "\n".join(lines)
-    # find first SQL keyword
-    m = re.search(r'\b(SELECT|INSERT|UPDATE|DELETE|CREATE|DROP|WITH)\b', cleaned, re.IGNORECASE)
+    m = re.search(r'\b(SELECT|INSERT|UPDATE|DELETE|CREATE|DROP|WITH)\b',
+                  cleaned, re.IGNORECASE)
     sql = cleaned[m.start():] if m else cleaned
     return sql.strip().rstrip(';')
 
-# 7. CLI Loop with confirmation for modifying statements
-print("Ask anything (type 'exit' to quit):")
-while True:
-    q = input(">> ")
-    if q.lower() in {"exit", "quit"}:
-        break
-    try:
-        raw = generate_query.invoke({"question": q})
-        print("\nRaw GPT-4o output:\n", raw)
+st.title("AI-Powered SQL Chat")
 
-        sql = extract_sql(raw)
-        print("\nProposed SQL:\n", sql)
+# Step 1: Ask user for question
+with st.form("question_form"):
+    st.text_input("Enter your question", key="question_input")
+    question_submit = st.form_submit_button("Send")
 
-        # if it modifies data, ask for confirmation
-        if re.match(r'^(INSERT|UPDATE|DELETE|CREATE|DROP)\b', sql, re.IGNORECASE):
-            confirm = input("This will modify the database. Proceed? (yes/no): ")
-            if confirm.strip().lower() != "yes":
-                print("Operation cancelled by user.\n")
-                continue
+# On new question, clear previous state and generate SQL + preview
+if question_submit:
+    for key in [
+        "raw_sql_block", "sql", "is_modifying",
+        "preview_sql", "preview_before",
+        "result", "preview_after", "final_answer",
+        "executed", "confirm"
+    ]:
+        st.session_state.pop(key, None)
 
-        # execute SQL
-        res = execute_query.invoke(sql)
-        print("\nRaw Result:\n", res)
+    raw = generate_query.invoke({"question": st.session_state.question_input})
+    sql = extract_sql(raw)
+    is_modifying = bool(re.match(r'^(INSERT|UPDATE|DELETE)', sql, re.IGNORECASE))
 
-        # human-friendly answer
-        human_answer = rephrase_answer.invoke({
-            "question": q,
-            "query": sql,
+    st.session_state.raw_sql_block = raw
+    st.session_state.sql = sql
+    st.session_state.is_modifying = is_modifying
+
+    # Build preview SELECT
+    preview_sql = None
+    if is_modifying:
+        kind = sql.split()[0].upper()
+        if kind in ("UPDATE", "DELETE"):
+            m = re.match(
+                r'^(?:UPDATE|DELETE)\s+(\w+)\s+.*WHERE\s+(.+)$',
+                sql, re.IGNORECASE | re.DOTALL
+            )
+            if m:
+                table, where = m.group(1), m.group(2)
+                preview_sql = f"SELECT * FROM {table} WHERE {where}"
+        elif kind == "INSERT":
+            m = re.match(r'^INSERT\s+INTO\s+(\w+)', sql, re.IGNORECASE)
+            if m:
+                table = m.group(1)
+                preview_sql = f"SELECT * FROM {table} ORDER BY 1 DESC LIMIT 5"
+
+        st.session_state.preview_sql = preview_sql
+        if preview_sql:
+            st.session_state.preview_before = execute_query.invoke(preview_sql)
+
+    # If not modifying, execute immediately
+    else:
+        main_sql = sql.split(";")[0].strip()
+        res = execute_query.invoke(main_sql)
+        st.session_state.result = res
+        st.session_state.final_answer = rephrase_answer.invoke({
+            "question": st.session_state.question_input,
+            "query": main_sql,
             "result": res
         })
-        print("\nRephrased Answer:\n", human_answer, "\n")
+        st.session_state.executed = True
 
-    except Exception as err:
-        print("Error:", err, "\n")
+# Step 2: Display raw + proposed SQL
+if "sql" in st.session_state:
+    st.subheader("Raw AI Output")
+    st.code(st.session_state.raw_sql_block)
+
+    st.subheader("Proposed SQL")
+    st.code(st.session_state.sql)
+
+    # If modifying: show before-preview + confirm checkbox + execute button
+    if st.session_state.is_modifying:
+        st.subheader("Preview (Before)")
+        st.write(st.session_state.preview_before or "No matching rows")
+
+        st.session_state.confirm = st.checkbox(
+            "I understand this will modify the database",
+            key="confirm_checkbox"
+        )
+        execute_now = st.button("Execute Change")
+
+        if st.session_state.confirm and execute_now:
+            main_sql = st.session_state.sql.split(";")[0].strip()
+            res = execute_query.invoke(main_sql)
+            st.session_state.result = res
+            # after-preview
+            if st.session_state.preview_sql:
+                st.session_state.preview_after = execute_query.invoke(
+                    st.session_state.preview_sql
+                )
+            st.session_state.final_answer = rephrase_answer.invoke({
+                "question": st.session_state.question_input,
+                "query": main_sql,
+                "result": res
+            })
+            st.session_state.executed = True
+
+    # Step 3: Display results + after-preview + answer
+    if st.session_state.get("executed", False):
+        st.subheader("Raw Result")
+        st.write(st.session_state.result)
+
+        if st.session_state.is_modifying and st.session_state.get("preview_after") is not None:
+            st.subheader("Preview (After)")
+            st.write(st.session_state.preview_after)
+
+        st.subheader("Answer")
+        st.write(st.session_state.final_answer)
