@@ -10,7 +10,7 @@ from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 
 # 1. Configure environment and credentials
-os.environ["OPENAI_API_KEY"] = "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"
+#PUT SPI KRY HRTR
 DB_USER     = "root"
 DB_PASSWORD = "Aes2024358.."
 DB_HOST     = "localhost"
